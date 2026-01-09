@@ -21,6 +21,7 @@ AIエージェント向けの指示ドキュメントは、次のような問題
 - 自動化された文書メトリクス（行数、構造、リンク）
 - 客観的な品質スコア（0-10スケール）
 - 冗長性の検出
+- ネストした `AGENTS.md` の探索（階層オーバーライドを前提にしたディレクトリスコープ分析）
 - Pure Node.js実装（外部依存なし）
 
 ### 📋 包括的なレビュー基準
@@ -189,6 +190,18 @@ node agent-document-reviewer/scripts/analyze_document.js README.md
 
 ```bash
 node agent-document-reviewer/scripts/analyze_document.js tests/sample-agents.md
+```
+
+ディレクトリ配下のネスト `AGENTS.md` を探索（モノレポの階層オーバーライド確認に有用）：
+
+```bash
+node agent-document-reviewer/scripts/analyze_document.js --scope tree --format summary path/to/
+```
+
+探索対象のファイル名も変更できます（そのファイル名に階層探索/オーバーライドがあるツールの場合のみ推奨）：
+
+```bash
+node agent-document-reviewer/scripts/analyze_document.js --scope tree --match AGENTS.md --format summary path/to/
 ```
 
 ### スキルの再ビルド

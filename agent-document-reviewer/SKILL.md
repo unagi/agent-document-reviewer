@@ -20,50 +20,54 @@ Follow this sequence when reviewing a document:
 
 ### 1. Initial Analysis
 
-Run the quantitative analysis script to get objective metrics.
-
-**Script Location**: The analysis script is at `scripts/analyze_document.js` relative to the skill directory. Depending on your working directory and environment setup, you may need to adjust the path:
+Run the quantitative analysis script to get objective metrics:
 
 ```bash
-# Codex standard installation path
-node ~/.codex/skills/agent-document-reviewer/scripts/analyze_document.js --format summary <file-path>
-
-# If script is in your working directory
+# Analyze single file
 node scripts/analyze_document.js --format summary <file-path>
 
-# With explicit relative path
-node ./agent-document-reviewer/scripts/analyze_document.js --format summary <file-path>
-
-# With custom absolute path (if needed)
-node /path/to/skill/scripts/analyze_document.js --format summary <file-path>
+# Analyze file + all linked files (recommended for documents with progressive disclosure)
+node scripts/analyze_document.js --format summary --include-links <file-path>
 ```
 
-**Important**: Use `--format summary` option to produce concise output suitable for LLM contexts. This omits detailed section arrays and provides only key metrics and evaluation scores.
+**Why `--include-links` is important**: Progressive disclosure isn't just about having links—it's about the quality of the entire system (main doc + linked docs). Without analyzing referenced files, you can miss critical issues like over-fragmentation in reference documents.
 
-This provides:
-- Line count, word count, section count
-- Heading depth and structure metrics
-- Internal vs external link ratio
-- Potential redundancy indicators
-- Automated quality scores
+The `--include-links` option:
+- Follows internal markdown links automatically
+- Detects circular references
+- Reports missing files (broken links)
+- Provides aggregate quality metrics across all documents
 
-**Example output** (with `--format summary`):
-```json
-{
-  "file": "AGENTS.md",
-  "metrics": {
-    "totalLines": 450,
-    "sectionCount": 12,
-    "maxDepth": 3,
-    "internalLinks": 5,
-    "redundancyCount": 0
-  },
-  "evaluation": {
-    "scores": { "overall": 8 },
-    "feedback": ["✅ Document length is acceptable..."]
-  }
-}
+For detailed usage including path options and output format, see [Using the Analysis Script](#using-the-analysis-script) below.
+
+### 1.5. Scope & Overrides (Convention-Aware)
+
+This skill is not AGENTS.md-only. **Instruction discovery, scope, and overrides vary by tool and filename**. Before expanding scope beyond the requested file, identify which tool consumes it (AGENTS.md / Claude Code / GitHub Copilot / Aider / etc.).
+
+**For AGENTS.md (agents.md open format):**
+
+When reviewing `path/to/AGENTS.md`, treat it as instructions for the directory subtree `path/to/**` — but note that **nested `AGENTS.md` files override parent instructions for their own subtrees**.
+
+- **Scope rule (default)**: Only analyze the target subtree and documents reachable via links from in-scope `AGENTS.md` files. Do **not** crawl the entire repository by default.
+- **Override model**: The closest `AGENTS.md` to the edited file wins; explicit user chat prompts override everything.
+- **What to review**: the requested `AGENTS.md`, any nested `AGENTS.md` under that directory (they change effective rules for parts of the subtree), and any linked documents from those in-scope `AGENTS.md` files.
+
+To discover nested overrides:
+```bash
+# Analyze all AGENTS.md files under a directory
+node scripts/analyze_document.js --scope tree --format summary path/to/
+
+# Analyze AGENTS.md + nested AGENTS.md under its directory
+node scripts/analyze_document.js --scope tree --format summary path/to/AGENTS.md
 ```
+
+**For other instruction files (CLAUDE.md, GitHub Copilot, Aider, etc.):**
+
+Do **not** assume "nearest file wins" or parent-directory discovery unless the tool's documentation says so. See [conventions.md](references/conventions.md) for a quick reference.
+
+If the tool is unknown, keep scope to:
+- the requested file
+- documents explicitly linked from it
 
 ### 2. Qualitative Review
 
@@ -83,6 +87,7 @@ Read the document with these questions in mind:
 - Is detailed content split into separate files?
 - Are internal links clear about when to read them?
 - Is the main document lean enough to be fully loaded?
+- **⚠️ CRITICAL**: Review linked files too! Use `--include-links` in Step 1. High internal link count means nothing if referenced files have poor quality (e.g., 71 sections, over-fragmentation).
 
 For detailed criteria, see [review-criteria.md](references/review-criteria.md).
 
@@ -145,10 +150,37 @@ The `scripts/analyze_document.js` script provides deterministic metrics to suppo
 
 **Basic usage**:
 ```bash
-node scripts/analyze_document.js path/to/AGENTS.md
+# Single file
+node scripts/analyze_document.js --format summary <file-path>
+
+# File + linked files (recommended)
+node scripts/analyze_document.js --format summary --include-links <file-path>
 ```
 
-**Output**: JSON object containing:
+**Options for `--include-links`**:
+```bash
+# Default: depth=1, count=10
+node scripts/analyze_document.js --format summary --include-links <file-path>
+
+# Custom limits (for large documentation systems)
+node scripts/analyze_document.js --format summary --include-links --max-depth 2 --max-count 20 <file-path>
+```
+
+**Path options** (depending on your working directory):
+```bash
+# Codex standard installation path
+node ~/.codex/skills/agent-document-reviewer/scripts/analyze_document.js --format summary --include-links <file-path>
+
+# Claude Code standard installation path
+node ~/.claude/skills/agent-document-reviewer/scripts/analyze_document.js --format summary --include-links <file-path>
+
+# Relative path from working directory
+node scripts/analyze_document.js --format summary --include-links <file-path>
+```
+
+**Important**: Use `--format summary` to produce concise output suitable for LLM contexts. This omits detailed section arrays and provides only key metrics and evaluation scores.
+
+**Output** (single file):
 ```json
 {
   "file": "AGENTS.md",
@@ -157,21 +189,36 @@ node scripts/analyze_document.js path/to/AGENTS.md
     "sectionCount": 12,
     "maxDepth": 3,
     "internalLinks": 5,
-    "externalLinks": 2,
     ...
   },
   "evaluation": {
-    "scores": {
-      "lineCount": 7,
-      "structure": 9,
-      "progressiveDisclosure": 10,
-      "overall": 8
+    "scores": { "overall": 8 },
+    "feedback": ["✅ Document length is acceptable..."]
+  }
+}
+```
+
+**Output** (with `--include-links`):
+```json
+{
+  "file": "AGENTS.md",
+  "linkedAnalysis": {
+    "analyzed": [
+      { "file": "AGENTS.md", "depth": 0, "metrics": {...}, "evaluation": {...} },
+      { "file": "TESTING.md", "depth": 1, "metrics": {...}, "evaluation": {...} }
+    ],
+    "notFound": ["references/missing-file.md"],
+    "skipped": {
+      "circular": [],
+      "maxDepth": ["deeper-file.md"],
+      "maxCount": []
     },
-    "feedback": [
-      "✅ Document length is acceptable (200-500 lines)",
-      "✅ Good use of internal links for progressive disclosure",
-      ...
-    ]
+    "summary": {
+      "totalAnalyzed": 2,
+      "averageScore": 7.5,
+      "worstScore": 7,
+      "worstFile": "/path/to/AGENTS.md"
+    }
   }
 }
 ```
@@ -209,23 +256,26 @@ For comprehensive best practices with templates, see [best-practices.md](referen
 
 ## Common Improvement Patterns
 
-### Pattern 1: Document Too Long (>800 lines)
+| Problem | Solution | Key Technique |
+|---------|----------|---------------|
+| **Document too long** (>800 lines) | Split into core + specialized topics | Progressive disclosure with internal links |
+| **Critical rules buried** | Create "Core Principles" section at top | Front-load MUST/NEVER rules |
+| **High redundancy** | Consolidate repeated content | State once, cross-reference elsewhere |
+| **No progressive disclosure** | Extract detailed sections to separate files | Keep main doc <500 lines |
 
-**Solution**: Split into core document + specialized topics
+### Examples
 
+**Pattern 1: Splitting long documents**
 ```markdown
 # Main Document (keep essential workflow)
 
 ## Specialized Topics
-- Testing: See [TESTING.md](TESTING.md) for test strategies
-- API: See [API.md](API.md) for REST conventions
-- Database: See [DATABASE.md](DATABASE.md) for schema details
+- Testing: See [TESTING.md](TESTING.md)
+- API: See [API.md](API.md)
+- Database: See [DATABASE.md](DATABASE.md)
 ```
 
-### Pattern 2: Critical Rules Buried
-
-**Solution**: Create "Core Principles" section at top
-
+**Pattern 2: Front-loading critical rules**
 ```markdown
 # Agent Instructions
 
@@ -233,26 +283,9 @@ For comprehensive best practices with templates, see [best-practices.md](referen
 1. Always run tests before committing
 2. Never commit secrets
 3. Use conventional commits
-...
-
-## Detailed Guidelines
-[Everything else below]
 ```
 
-### Pattern 3: High Redundancy
-
-**Solution**: Consolidate repeated content, use cross-references
-
-**Before**:
-```markdown
-## Section A
-Always use TypeScript for new files.
-
-## Section B
-Remember to use TypeScript for new files.
-```
-
-**After**:
+**Pattern 3: Eliminating redundancy**
 ```markdown
 ## Core Principles
 - Use TypeScript for all new files
@@ -260,18 +293,6 @@ Remember to use TypeScript for new files.
 ## Section B
 Follow core principles above for file creation.
 ```
-
-### Pattern 4: No Progressive Disclosure
-
-**Solution**: Extract detailed sections into separate files
-
-**Before**: Single 1200-line AGENTS.md
-
-**After**:
-- AGENTS.md (400 lines): Core workflow + navigation
-- TESTING.md (250 lines): Test details
-- API.md (300 lines): API standards
-- DEPLOY.md (250 lines): Deployment process
 
 ## Notes on Interaction Style
 

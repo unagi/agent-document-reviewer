@@ -20,6 +20,7 @@ This skill helps identify these issues and provides concrete improvements backed
 - Automated document metrics (line count, structure, links)
 - Objective quality scoring (0-10 scale)
 - Redundancy detection
+- Optional tree-scope discovery for nested `AGENTS.md` files (override-aware)
 - Pure Node.js implementation (no external dependencies)
 
 ### 📋 Comprehensive Review Criteria
@@ -188,6 +189,18 @@ Test with a sample document:
 
 ```bash
 node agent-document-reviewer/scripts/analyze_document.js tests/sample-agents.md
+```
+
+Discover nested `AGENTS.md` files under a directory (useful for monorepos with hierarchical overrides):
+
+```bash
+node agent-document-reviewer/scripts/analyze_document.js --scope tree --format summary path/to/
+```
+
+You can also change the filename the tree scan looks for (use only if your agent/tool supports hierarchy for that filename):
+
+```bash
+node agent-document-reviewer/scripts/analyze_document.js --scope tree --match AGENTS.md --format summary path/to/
 ```
 
 ### Rebuilding the Skill

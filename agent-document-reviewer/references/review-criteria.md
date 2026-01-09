@@ -106,10 +106,13 @@ Our team was founded in...
 
 **Problem**: If all details are in a single file, agents must load everything into context even when only specific parts are relevant. This wastes tokens and increases the risk of missing important instructions.
 
+**Important**: Discovery/scope/override rules depend on the tool and filename. Do not assume that every instruction document behaves like `AGENTS.md`. When in doubt, confirm the tool’s conventions (see [conventions.md](conventions.md)).
+
 **What to Check**:
 - Is detailed information split into separate files?
 - Are internal links clear and well-motivated?
 - Is it obvious when to read linked content?
+- For monorepos, are rules appropriately scoped using nested `AGENTS.md` files (hierarchical overrides)?
 
 **Progressive Disclosure Pattern**:
 ```markdown
@@ -134,6 +137,10 @@ Use RESTful conventions. For complete API reference, see [API.md](API.md).
 For more info, see [OTHER.md](OTHER.md)
 (When should I read it? What will I find?)
 
+# Bad: Ignoring hierarchy
+# repo-root/AGENTS.md and packages/foo/AGENTS.md disagree, but the review treats both as equally applicable.
+# In practice, the closest AGENTS.md wins for files under packages/foo.
+
 # Bad: Everything in one file
 AGENTS.md (2000 lines covering everything)
 
@@ -148,14 +155,19 @@ See [C.md](C.md) for Z
 - Is there a clear incentive to follow each link?
 - Would an agent know when to read the linked content?
 - Is the main document lean enough to be fully loaded?
+- If nested `AGENTS.md` files exist, is it clear which one applies to which subtree (closest file wins)?
+- Are overrides intentional and documented (instead of accidental contradictions)?
 
 **Evaluation**:
+- ✅ Document is short enough to be fully loaded (e.g., ≤200 lines), so progressive disclosure is optional
 - ✅ 3+ meaningful internal links with clear triggers
 - ✅ Main document under 500 lines
 - ✅ Links describe when/why to read them
+- ✅ Overrides are scoped via nested `AGENTS.md` with clear boundaries
 - ⚠️  Some links present but unclear when to use
 - ❌ No internal links (monolithic document)
 - ❌ Too many links without clear purpose
+- ❌ Conflicting `AGENTS.md` files without acknowledging the hierarchy (closest wins)
 
 ---
 
@@ -163,48 +175,14 @@ See [C.md](C.md) for Z
 
 **Purpose**: Provide objective measurements to support qualitative review.
 
-**Key Metrics**:
-
-### 1. Line Count
-- **Excellent**: ≤200 lines
-- **Good**: 201-500 lines
-- **Warning**: 501-800 lines
-- **Critical**: >800 lines
-
-*Rationale*: Longer documents increase the risk of sequential readers missing important content.
-
-### 2. Section Count
-- **Good**: ≤15 sections
-- **Acceptable**: 16-30 sections
-- **Warning**: >30 sections
-
-*Rationale*: Too many sections indicate fragmentation; too few indicate lack of structure.
-
-### 3. Heading Depth
-- **Good**: ≤3 levels (###)
-- **Acceptable**: 4 levels (####)
-- **Warning**: ≥5 levels (#####)
-
-*Rationale*: Deep nesting makes navigation difficult and suggests over-complication.
-
-### 4. Internal Link Ratio
-- **Excellent**: ≥50% of links are internal
-- **Good**: 20-49% internal links
-- **Poor**: <20% internal links, or no links at all
-
-*Rationale*: Internal links indicate good progressive disclosure design.
-
-### 5. Average Section Length
-- **Good**: 15-50 lines per section
-- **Warning**: <15 lines (over-fragmented) or >100 lines (too dense)
-
-*Rationale*: Sections should be substantial but digestible.
-
-### 6. Front-Loaded Content
-- **Good**: Critical instructions in first 100 lines
-- **Measure**: Percentage of key requirements in first 20% of document
-
-*Rationale*: Early content is more likely to be read.
+| Metric | Excellent | Good | Warning | Critical | Rationale |
+|--------|-----------|------|---------|----------|-----------|
+| **Line Count** | ≤200 | 201-500 | 501-800 | >800 | Longer docs increase risk of missing content |
+| **Section Count** | - | ≤15 | 16-30 | >30 | Too many = fragmentation; too few = lack of structure |
+| **Heading Depth** | - | ≤3 levels | 4 levels | ≥5 levels | Deep nesting makes navigation difficult |
+| **Internal Link Ratio** | ≥50% | 20-49% | <20% or none | - | Internal links indicate good progressive disclosure |
+| **Avg Section Length** | - | 15-50 lines | <15 or >100 | - | Sections should be substantial but digestible |
+| **Front-Loaded Content** | Critical instructions in first 100 lines | - | - | - | Early content is more likely to be read |
 
 ---
 
