@@ -1,0 +1,22 @@
+{
+  "name": "agent-document-reviewer-marketplace",
+  "owner": {
+    "name": "unagi",
+    "email": "ray@ymgch.org"
+  },
+  "metadata": {
+    "description": "Agent document reviewer skill for Claude Code",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "agent-document-reviewer",
+      "description": "Review and improve AI agent instruction documents (AGENTS.md, Claude.md, etc.) for quality, clarity, and effectiveness. Identifies bloat, poor structure, redundancy, and suggests improvements.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./agent-document-reviewer"
+      ]
+    }
+  ]
+}
