@@ -44,18 +44,34 @@ This skill helps identify these issues and provides concrete improvements backed
 
 ### For Claude Code
 
-Download the latest release from GitHub:
+#### Recommended: Plugin Marketplace (Easy Updates)
+
+Install via Claude Code's plugin marketplace system:
+
+```bash
+# Add this repository as a marketplace
+/plugin marketplace add https://github.com/unagi/agent-document-reviewer
+
+# Install the skill
+/plugin install agent-document-reviewer
+```
+
+This method enables automatic updates and is the easiest way to keep the skill current.
+
+#### Manual Installation
+
+If you prefer manual installation:
 
 ```bash
 # Download the latest skill package
 curl -LO https://github.com/unagi/agent-document-reviewer/releases/latest/download/agent-document-reviewer.skill
 
-# Install to Claude's skills directory
+# Extract to Claude's skills directory
 mkdir -p ~/.claude/skills
-mv agent-document-reviewer.skill ~/.claude/skills/
+unzip agent-document-reviewer.skill -d ~/.claude/skills/
 ```
 
-Or download manually from the [Releases page](https://github.com/unagi/agent-document-reviewer/releases).
+Or download manually from the [Releases page](https://github.com/unagi/agent-document-reviewer/releases) and extract the ZIP file to `~/.claude/skills/`.
 
 ### For Codex CLI
 

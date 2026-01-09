@@ -45,18 +45,34 @@ AIエージェント向けの指示ドキュメントは、次のような問題
 
 ### Claude Code向け
 
-GitHubから最新リリースをダウンロード：
+#### 推奨：Plugin Marketplace経由（自動更新対応）
+
+Claude CodeのPlugin Marketplaceシステム経由でインストールします：
+
+```bash
+# このリポジトリをmarketplaceとして追加
+/plugin marketplace add https://github.com/unagi/agent-document-reviewer
+
+# スキルをインストール
+/plugin install agent-document-reviewer
+```
+
+この方法であれば自動更新に対応し、スキルを最新の状態に保つことができます。
+
+#### 手動インストール
+
+手動でインストールする場合：
 
 ```bash
 # 最新のスキルパッケージをダウンロード
 curl -LO https://github.com/unagi/agent-document-reviewer/releases/latest/download/agent-document-reviewer.skill
 
-# Claudeのスキルディレクトリにインストール
+# Claudeのスキルディレクトリに展開
 mkdir -p ~/.claude/skills
-mv agent-document-reviewer.skill ~/.claude/skills/
+unzip agent-document-reviewer.skill -d ~/.claude/skills/
 ```
 
-または[Releasesページ](https://github.com/unagi/agent-document-reviewer/releases)から手動でダウンロードできます。
+または[Releasesページ](https://github.com/unagi/agent-document-reviewer/releases)から手動でダウンロードし、ZIPファイルを `~/.claude/skills/` に展開してください。
 
 ### Codex CLI向け
 
