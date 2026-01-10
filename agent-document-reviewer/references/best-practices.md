@@ -121,6 +121,29 @@ Provide quick-reference summaries at the top:
 - **Database**: See [DATABASE.md](DATABASE.md) for schema, migrations, and queries
 ```
 
+### Use Nested AGENTS.md for Monorepos (Hierarchy-Based Disclosure)
+
+Internal links are not the only way to keep instructions scoped. In large monorepos, you can place additional `AGENTS.md` files inside subprojects/packages so agents pick up **the closest file in the directory tree**.
+
+This is **tool- and filename-specific** behavior (it applies to the `AGENTS.md` ecosystem). Do not assume the same hierarchy applies to other instruction filenames like `CLAUDE.md` unless the tool’s documentation says so.
+
+**Pattern**:
+```markdown
+# repo-root/AGENTS.md
+Global workflow + navigation for the whole repo.
+
+# packages/foo/AGENTS.md
+Rules specific to packages/foo (overrides repo-root for this subtree).
+
+# packages/bar/AGENTS.md
+Rules specific to packages/bar (overrides repo-root for this subtree).
+```
+
+**Best practice**:
+- Keep the root `AGENTS.md` lean (global principles + how to find package-specific rules)
+- Keep each nested `AGENTS.md` self-contained for its subtree
+- Avoid duplicating the same rule across many nested files unless it truly must differ
+
 ### Make Links Actionable
 
 **Good links** - Clear trigger and value:
@@ -249,33 +272,21 @@ to improve progressive disclosure. Main document now 450 lines (was 650).
 
 ## Anti-Patterns to Avoid
 
-### ❌ Everything in One File
-Large monolithic documents (>1000 lines) are hard to maintain and navigate.
-
-### ❌ Too Much Fragmentation
-Splitting into 20+ files makes it hard to know where anything is.
-
-### ❌ Unclear Link Purposes
-Links without context leave readers guessing when to follow them.
-
-### ❌ Burying Critical Rules
-Important requirements should be front-loaded, not buried.
-
-### ❌ Excessive Examples
-One clear example > five similar ones.
-
-### ❌ Contradictory Instructions
-Sequential readers may miss corrections later in the document.
-
-### ❌ Stale Content
-Outdated instructions are worse than no instructions.
+| Anti-Pattern | Problem | Impact |
+|--------------|---------|--------|
+| **Everything in One File** | Large monolithic documents (>1000 lines) | Hard to maintain and navigate |
+| **Too Much Fragmentation** | Splitting into 20+ files | Hard to know where anything is |
+| **Unclear Link Purposes** | Links without context | Readers guess when to follow them |
+| **Burying Critical Rules** | Important requirements late in doc | May be missed by sequential reading |
+| **Excessive Examples** | Five similar examples | Wastes context (one clear example > five similar) |
+| **Contradictory Instructions** | Early sections contradicted later | Sequential readers miss corrections |
+| **Stale Content** | Outdated instructions | Worse than no instructions |
 
 ---
 
 ## Templates
 
-### Minimal AGENTS.md Template
-
+**Minimal AGENTS.md Template:**
 ```markdown
 # Agent Instructions
 
@@ -285,7 +296,6 @@ Outdated instructions are worse than no instructions.
 3. [Critical rule 3]
 
 ## Common Tasks
-
 ### Task 1
 [Concise instructions]
 
@@ -293,20 +303,17 @@ Outdated instructions are worse than no instructions.
 [Concise instructions]
 
 ## Detailed Guidelines
-
 For specialized topics, see:
 - [TOPIC1.md](TOPIC1.md) - [when to read this]
 - [TOPIC2.md](TOPIC2.md) - [when to read this]
 
 ## Quick Reference
-
 | Task | Command | Notes |
 |------|---------|-------|
 | ... | ... | ... |
 ```
 
-### Specialized Document Template
-
+**Specialized Document Template:**
 ```markdown
 # [Topic Name]
 
@@ -318,9 +325,6 @@ For specialized topics, see:
 
 ## [Primary Section]
 [Core content]
-
-## [Secondary Section]
-[Supporting content]
 
 ## Examples
 [One good example, if needed]
