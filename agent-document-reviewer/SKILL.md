@@ -219,6 +219,7 @@ node scripts/analyze_document.js --root-dir . <file-path>
     "sectionCount": 12,
     "maxDepth": 3,
     "internalLinks": 5,
+    "anchorLinks": 0,
     ...
   },
   "evaluation": {
@@ -292,6 +293,8 @@ Key evaluation dimensions:
 1. **Sequential vs. Complete Reading**: Does partial reading miss critical info?
 2. **Redundancy**: Is content unnecessarily repeated?
 3. **Progressive Disclosure**: Are details appropriately split into linked files?
+   - ⚠️ **Anchor links** (`#section`) are penalized - LLMs read entire documents at once, making same-document navigation meaningless
+   - ✅ Use separate files instead to reduce context size
 4. **Quantitative Metrics**: Line count, structure, link ratios
 
 For detailed criteria with examples, see [review-criteria.md](references/review-criteria.md).

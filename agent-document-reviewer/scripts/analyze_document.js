@@ -203,6 +203,7 @@ function analyzeWithLinks(filePath, options = {}) {
       maxDepth: metrics.maxDepth,
       internalLinks: metrics.internalLinks,
       externalLinks: metrics.externalLinks,
+      anchorLinks: metrics.anchorLinks,
       totalLinks: metrics.totalLinks,
       frontLoadedContent: metrics.frontLoadedContent,
       avgSectionLength: metrics.avgSectionLength,
@@ -318,6 +319,7 @@ function analyzeDocument(filePath) {
     // Link metrics
     internalLinks: 0,
     externalLinks: 0,
+    anchorLinks: 0,
     totalLinks: 0,
 
     // Content distribution
@@ -353,6 +355,13 @@ function analyzeDocument(filePath) {
     for (const match of linkMatches) {
       metrics.totalLinks++;
       const url = match[2];
+
+      // Anchor links (same-document navigation, meaningless for LLMs)
+      if (url.startsWith('#')) {
+        metrics.anchorLinks++;
+        continue;
+      }
+
       const normalizedTarget = normalizeMarkdownLinkTarget(url);
       if (normalizedTarget) metrics.internalLinks++;
       else metrics.externalLinks++;
@@ -476,6 +485,12 @@ function evaluateMetrics(metrics) {
       scores.progressiveDisclosure = 3;
       feedback.push('❌ No internal links detected - consider splitting content via links or tool-supported scoping (e.g., nested AGENTS.md)');
     }
+  }
+
+  // Anchor links penalty (same-document navigation is meaningless for LLMs)
+  if (metrics.anchorLinks > 0) {
+    scores.progressiveDisclosure = Math.max(0, scores.progressiveDisclosure - 2);
+    feedback.push(`❌ Anchor links (#...) are meaningless for LLMs - use separate files instead (found ${metrics.anchorLinks})`);
   }
 
   // Redundancy check
@@ -725,6 +740,7 @@ function main() {
               maxDepth: metrics.maxDepth,
               internalLinks: metrics.internalLinks,
               externalLinks: metrics.externalLinks,
+              anchorLinks: metrics.anchorLinks,
               totalLinks: metrics.totalLinks,
               frontLoadedContent: metrics.frontLoadedContent,
               avgSectionLength: metrics.avgSectionLength,
@@ -757,6 +773,7 @@ function main() {
                 maxDepth: metrics.maxDepth,
                 internalLinks: metrics.internalLinks,
                 externalLinks: metrics.externalLinks,
+                anchorLinks: metrics.anchorLinks,
                 totalLinks: metrics.totalLinks,
                 frontLoadedContent: metrics.frontLoadedContent,
                 avgSectionLength: metrics.avgSectionLength,
