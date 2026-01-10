@@ -21,7 +21,7 @@ AIエージェント向けの指示ドキュメントは、次のような問題
 - 自動化された文書メトリクス（行数、構造、リンク）
 - 客観的な品質スコア（0-10スケール）
 - 冗長性の検出
-- ネストした `AGENTS.md` の探索（階層オーバーライドを前提にしたディレクトリスコープ分析）
+- 複数エントリポイントの一括解析（共通参照は1回だけ解析して重複排除）
 - Pure Node.js実装（外部依存なし）
 
 ### 📋 包括的なレビュー基準
@@ -180,28 +180,29 @@ agent-document-reviewer/
 
 ### 分析スクリプトのテスト
 
-このプロジェクト自身のREADMEでテスト：
+推奨：ファイル本体 + リンク先ドキュメントまで解析（`--root-dir` が必要）：
 
 ```bash
-node agent-document-reviewer/scripts/analyze_document.js README.md
+node agent-document-reviewer/scripts/analyze_document.js --root-dir . README.md
 ```
 
-サンプルドキュメントでテスト：
+単体ファイルのみ（リンク解析をスキップ）：
 
 ```bash
-node agent-document-reviewer/scripts/analyze_document.js tests/sample-agents.md
+node agent-document-reviewer/scripts/analyze_document.js --no-include-links README.md
 ```
 
-ディレクトリ配下のネスト `AGENTS.md` を探索（モノレポの階層オーバーライド確認に有用）：
+ディレクトリ配下の `AGENTS.md` をまとめて解析（共通参照は重複排除）：
 
 ```bash
-node agent-document-reviewer/scripts/analyze_document.js --scope tree --format summary path/to/
+find path/to/project -name "AGENTS.md" -exec \
+  node agent-document-reviewer/scripts/analyze_document.js --root-dir path/to/project {} +
 ```
 
-探索対象のファイル名も変更できます（そのファイル名に階層探索/オーバーライドがあるツールの場合のみ推奨）：
+任意の安全策（リンク追跡時にシンボリックリンクを辿らない）：
 
 ```bash
-node agent-document-reviewer/scripts/analyze_document.js --scope tree --match AGENTS.md --format summary path/to/
+node agent-document-reviewer/scripts/analyze_document.js --root-dir . --no-symlinks README.md
 ```
 
 ### スキルの再ビルド

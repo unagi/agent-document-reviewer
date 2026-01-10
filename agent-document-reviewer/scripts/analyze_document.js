@@ -6,118 +6,112 @@
  * Analyzes markdown documents (like AGENTS.md) and provides metrics
  * to help evaluate document quality for AI agent consumption.
  *
- * Usage: node analyze_document.js [options] <file-path>
+ * Usage: node analyze_document.js [options] <file-path> [<file-path2> ...]
  * Options:
- *   --format summary     Output concise summary without detailed sections (recommended for LLM contexts)
- *   --scope tree         If <file-path> is a directory (or a matching file), analyze all nested matching files (default match: AGENTS.md)
- *   --match <filename>   Filename to discover in --scope tree (default: AGENTS.md). Use only if your agent/tool supports this convention.
- *   --max-agents <n>     Max matching files to analyze in --scope tree (default: 200)
- *   --include-links      Follow internal links and analyze referenced files
- *   --max-depth <n>      Max depth when following links (default: 1, requires --include-links)
- *   --max-count <n>      Max files to analyze when following links (default: 10, requires --include-links)
+ *   --format full        Output full analysis (default: summary; use "summary" or "full")
+ *   --no-include-links   Skip link analysis (default: enabled with --root-dir)
+ *   --root-dir <path>    Root directory for security sandboxing (REQUIRED for link analysis)
+ *   --max-depth <n>      Max depth when following links (default: 3)
+ *   --max-count <n>      Max files to analyze when following links (default: 30)
+ *   --no-symlinks        Skip symlink targets during link analysis (best-effort)
+ *
+ * Multiple file paths can be specified to analyze them together with shared deduplication.
+ * Common references (e.g., COMMON.md) are analyzed only once across all entry points.
  */
 
 const fs = require('fs');
 const path = require('path');
 
-function isDirectoryPath(filePath) {
-  try {
-    return fs.statSync(filePath).isDirectory();
-  } catch {
-    return false;
-  }
+function uniqStrings(values) {
+  return [...new Set(values)];
 }
 
-function normalizeAbsolutePath(filePath) {
-  return path.resolve(filePath);
+function hasScheme(url) {
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url);
 }
 
-function discoverConventionFiles(rootDir, matchFileName, maxAgents) {
-  const discovered = [];
-  const visitedDirs = new Set();
-  const stack = [normalizeAbsolutePath(rootDir)];
-  let truncated = false;
+function normalizeMarkdownLinkTarget(rawUrl) {
+  const trimmed = rawUrl.trim().replace(/^<|>$/g, '');
 
-  while (stack.length > 0) {
-    const currentDir = stack.pop();
-    if (visitedDirs.has(currentDir)) continue;
-    visitedDirs.add(currentDir);
+  if (trimmed.startsWith('#')) return null;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return null;
+  if (hasScheme(trimmed)) return null; // e.g. mailto:, javascript:, vscode:, etc.
 
-    let entries;
-    try {
-      entries = fs.readdirSync(currentDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
+  const withoutAnchor = trimmed.split('#')[0];
+  const withoutQuery = withoutAnchor.split('?')[0];
 
-    for (const entry of entries) {
-      if (entry.name === '.git' || entry.name === 'node_modules') continue;
-
-      const entryPath = path.join(currentDir, entry.name);
-
-      if (entry.isDirectory()) {
-        stack.push(entryPath);
-        continue;
-      }
-
-      if (entry.isFile() && entry.name === matchFileName) {
-        discovered.push(entryPath);
-        if (discovered.length >= maxAgents) {
-          truncated = true;
-          stack.length = 0;
-          break;
-        }
-      }
-    }
-  }
-
-  discovered.sort();
-  return { files: discovered, truncated };
+  // Handle optional title syntax: (path "title")
+  const firstToken = withoutQuery.trim().split(/\s+/)[0];
+  return firstToken || null;
 }
 
-function findNearestParentConventionFile(conventionFilePath, conventionFileSet, rootDir, matchFileName) {
-  const rootResolved = normalizeAbsolutePath(rootDir);
-  let currentDir = path.dirname(normalizeAbsolutePath(conventionFilePath));
+function isRealPathWithinRoot(realPath, rootRealPath) {
+  const relativePath = path.relative(rootRealPath, realPath);
+  if (relativePath === '') return true;
+  if (relativePath === '..') return false;
+  return !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath);
+}
 
-  if (currentDir === rootResolved) return null;
-
-  while (true) {
-    const parentDir = path.dirname(currentDir);
-    if (parentDir === currentDir) return null;
-    if (path.relative(rootResolved, parentDir).startsWith('..')) return null;
-
-    const parentCandidate = normalizeAbsolutePath(path.join(parentDir, matchFileName));
-    if (conventionFileSet.has(parentCandidate)) return parentCandidate;
-
-    currentDir = parentDir;
-  }
+function resolveRootRealPath(rootDir) {
+  return fs.realpathSync(path.resolve(rootDir));
 }
 
 /**
  * Extracts internal links from markdown content and resolves their paths
+ * @param {string} filePath - The path of the current file
+ * @param {string} content - The markdown content
+ * @param {string|null} rootDir - The root directory for security sandboxing (optional)
+ * @param {boolean} noSymlinks - Whether to skip symlinks when resolving links
+ * @returns {Object} Object with 'valid', 'outsideRoot', and 'symlinks' arrays
  */
-function extractInternalLinks(filePath, content) {
-  const links = [];
+function extractInternalLinks(filePath, content, rootDir = null, noSymlinks = false) {
+  const valid = [];
+  const outsideRoot = [];
+  const symlinks = [];
   const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
   let match;
 
   while ((match = linkRegex.exec(content)) !== null) {
-    const url = match[2];
+    const rawUrl = match[2];
+    const cleanUrl = normalizeMarkdownLinkTarget(rawUrl);
+    if (!cleanUrl) continue;
 
-    // Only process internal links (not http/https)
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      // Remove anchor (#...) if present
-      const cleanUrl = url.split('#')[0];
-      if (cleanUrl) {
-        // Resolve relative to the current file's directory
-        const resolvedPath = path.resolve(path.dirname(filePath), cleanUrl);
-        links.push(resolvedPath);
+    // Resolve relative to the current file's directory
+    const resolvedPath = path.resolve(path.dirname(filePath), cleanUrl);
+
+    // Optional: skip obvious symlink targets (best-effort; full enforcement is in analyzeWithLinks)
+    if (noSymlinks) {
+      try {
+        const stat = fs.lstatSync(resolvedPath);
+        if (stat.isSymbolicLink()) {
+          symlinks.push({ url: cleanUrl, resolvedPath });
+          continue;
+        }
+      } catch {
+        // ignore lstat errors here; existence is validated later in analyzeWithLinks
       }
     }
+
+    // Fast path: block directory traversal by path comparison (authoritative check happens via realpath in analyzeWithLinks)
+    if (rootDir) {
+      const normalizedRoot = path.resolve(rootDir);
+      const relativePath = path.relative(normalizedRoot, resolvedPath);
+      if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+        console.warn(`[SECURITY] Blocked link outside root directory: ${cleanUrl} -> ${resolvedPath}`);
+        outsideRoot.push({ url: cleanUrl, resolvedPath });
+        continue;
+      }
+    }
+
+    valid.push(resolvedPath);
   }
 
   // Return unique paths
-  return [...new Set(links)];
+  return {
+    valid: uniqStrings(valid),
+    outsideRoot,
+    symlinks
+  };
 }
 
 /**
@@ -125,11 +119,13 @@ function extractInternalLinks(filePath, content) {
  */
 function analyzeWithLinks(filePath, options = {}) {
   const {
-    maxDepth = 1,
-    maxCount = 10,
+    maxDepth = 3,
+    maxCount = 30,
     format = 'summary',
+    rootDir = null,
+    rootRealPath = null,
+    noSymlinks = false,
     visited = new Set(),
-    analyzing = new Set(),
     currentDepth = 0
   } = options;
 
@@ -137,9 +133,10 @@ function analyzeWithLinks(filePath, options = {}) {
     analyzed: [],
     notFound: [],
     skipped: {
-      circular: [],
       maxDepth: [],
-      maxCount: []
+      maxCount: [],
+      outsideRoot: [],
+      symlinks: []
     },
     summary: {
       totalAnalyzed: 0,
@@ -152,15 +149,8 @@ function analyzeWithLinks(filePath, options = {}) {
   // Normalize path
   const normalizedPath = path.resolve(filePath);
 
-  // Check if already visited (avoid cycles)
+  // Check if already visited (skip - already analyzed via alternate route or infinite loop prevention)
   if (visited.has(normalizedPath)) {
-    result.skipped.circular.push(normalizedPath);
-    return result;
-  }
-
-  // Check if currently being analyzed (direct cycle)
-  if (analyzing.has(normalizedPath)) {
-    result.skipped.circular.push(normalizedPath);
     return result;
   }
 
@@ -176,98 +166,132 @@ function analyzeWithLinks(filePath, options = {}) {
     return result;
   }
 
-  // Mark as visited and currently analyzing
+  // Security sandbox: enforce realpath stays within root, and optionally avoid symlinks entirely.
+  if (rootDir) {
+    const effectiveRootRealPath = rootRealPath || resolveRootRealPath(rootDir);
+    const fileRealPath = fs.realpathSync(normalizedPath);
+
+    if (!isRealPathWithinRoot(fileRealPath, effectiveRootRealPath)) {
+      console.warn(`[SECURITY] Blocked file outside root directory via realpath: ${normalizedPath} -> ${fileRealPath}`);
+      result.skipped.outsideRoot.push({ url: filePath, resolvedPath: normalizedPath });
+      return result;
+    }
+
+    if (noSymlinks && path.resolve(fileRealPath) !== normalizedPath) {
+      result.skipped.symlinks.push({ url: filePath, resolvedPath: normalizedPath });
+      return result;
+    }
+  }
+
+  // Mark as visited
   visited.add(normalizedPath);
-  analyzing.add(normalizedPath);
 
-  try {
-    // Analyze current file
-    const content = fs.readFileSync(normalizedPath, 'utf-8');
-    const metrics = analyzeDocument(normalizedPath);
-    const evaluation = evaluateMetrics(metrics);
+  // Analyze current file
+  const content = fs.readFileSync(normalizedPath, 'utf-8');
+  const metrics = analyzeDocument(normalizedPath);
+  const evaluation = evaluateMetrics(metrics);
 
-    const fileResult = {
-      file: path.basename(normalizedPath),
-      fullPath: normalizedPath,
-      depth: currentDepth,
-      metrics: format === 'summary' ? {
-        totalLines: metrics.totalLines,
-        nonEmptyLines: metrics.nonEmptyLines,
-        wordCount: metrics.wordCount,
-        sectionCount: metrics.sectionCount,
-        maxDepth: metrics.maxDepth,
-        internalLinks: metrics.internalLinks,
-        externalLinks: metrics.externalLinks,
-        totalLinks: metrics.totalLinks,
-        frontLoadedContent: metrics.frontLoadedContent,
-        avgSectionLength: metrics.avgSectionLength,
-        redundancyCount: metrics.redundancyIndicators.length
-      } : metrics,
-      evaluation
-    };
+  const fileResult = {
+    file: path.basename(normalizedPath),
+    fullPath: normalizedPath,
+    depth: currentDepth,
+    metrics: format === 'summary' ? {
+      totalLines: metrics.totalLines,
+      nonEmptyLines: metrics.nonEmptyLines,
+      wordCount: metrics.wordCount,
+      sectionCount: metrics.sectionCount,
+      maxDepth: metrics.maxDepth,
+      internalLinks: metrics.internalLinks,
+      externalLinks: metrics.externalLinks,
+      totalLinks: metrics.totalLinks,
+      frontLoadedContent: metrics.frontLoadedContent,
+      avgSectionLength: metrics.avgSectionLength,
+      redundancyCount: metrics.redundancyIndicators.length
+    } : metrics,
+    evaluation
+  };
 
-    result.analyzed.push(fileResult);
-    result.summary.totalAnalyzed++;
+  result.analyzed.push(fileResult);
+  result.summary.totalAnalyzed++;
 
-    // Update worst score tracking
-    const score = evaluation.scores.overall;
-    if (score < result.summary.worstScore) {
-      result.summary.worstScore = score;
-      result.summary.worstFile = normalizedPath;
-    }
+  // Update worst score tracking
+  const score = evaluation.scores.overall;
+  if (score < result.summary.worstScore) {
+    result.summary.worstScore = score;
+    result.summary.worstFile = normalizedPath;
+  }
 
-    // If we haven't reached max depth, follow links
-    if (currentDepth < maxDepth) {
-      const internalLinks = extractInternalLinks(normalizedPath, content);
+  // If we haven't reached max depth, follow links
+  if (currentDepth < maxDepth) {
+    const linkResult = extractInternalLinks(normalizedPath, content, rootDir, noSymlinks);
+    const internalLinks = linkResult.valid;
 
-      for (const linkedPath of internalLinks) {
-        // Skip if we've reached max count
-        if (visited.size >= maxCount) {
-          result.skipped.maxCount.push(linkedPath);
-          continue;
-        }
+    // Track blocked links
+    result.skipped.outsideRoot.push(...linkResult.outsideRoot);
+    result.skipped.symlinks.push(...linkResult.symlinks);
 
-        // Recursively analyze linked file
-        const linkedResult = analyzeWithLinks(linkedPath, {
-          maxDepth,
-          maxCount,
-          format,
-          visited,
-          analyzing,
-          currentDepth: currentDepth + 1
-        });
-
-        // Merge results
-        result.analyzed.push(...linkedResult.analyzed);
-        result.notFound.push(...linkedResult.notFound);
-        result.skipped.circular.push(...linkedResult.skipped.circular);
-        result.skipped.maxDepth.push(...linkedResult.skipped.maxDepth);
-        result.skipped.maxCount.push(...linkedResult.skipped.maxCount);
-
-        result.summary.totalAnalyzed = result.analyzed.length;
-        if (linkedResult.summary.worstScore < result.summary.worstScore) {
-          result.summary.worstScore = linkedResult.summary.worstScore;
-          result.summary.worstFile = linkedResult.summary.worstFile;
-        }
+    for (const linkedPath of internalLinks) {
+      // Skip if we've reached max count
+      if (visited.size >= maxCount) {
+        result.skipped.maxCount.push(linkedPath);
+        continue;
       }
-    } else if (currentDepth === maxDepth) {
-      // At max depth, record any links we would have followed
-      const internalLinks = extractInternalLinks(normalizedPath, content);
-      for (const linkedPath of internalLinks) {
-        if (!visited.has(path.resolve(linkedPath))) {
-          result.skipped.maxDepth.push(linkedPath);
-        }
+
+      // Recursively analyze linked file
+      const linkedResult = analyzeWithLinks(linkedPath, {
+        maxDepth,
+        maxCount,
+        format,
+        rootDir,
+        rootRealPath,
+        noSymlinks,
+        visited,
+        currentDepth: currentDepth + 1
+      });
+
+      // Merge results
+      result.analyzed.push(...linkedResult.analyzed);
+      result.notFound.push(...linkedResult.notFound);
+      result.skipped.maxDepth.push(...linkedResult.skipped.maxDepth);
+      result.skipped.maxCount.push(...linkedResult.skipped.maxCount);
+      result.skipped.outsideRoot.push(...linkedResult.skipped.outsideRoot);
+      result.skipped.symlinks.push(...linkedResult.skipped.symlinks);
+
+      result.summary.totalAnalyzed = result.analyzed.length;
+      if (linkedResult.summary.worstScore < result.summary.worstScore) {
+        result.summary.worstScore = linkedResult.summary.worstScore;
+        result.summary.worstFile = linkedResult.summary.worstFile;
       }
     }
-  } finally {
-    // Remove from analyzing set
-    analyzing.delete(normalizedPath);
+  } else if (currentDepth === maxDepth) {
+    // At max depth, record any links we would have followed
+    const linkResult = extractInternalLinks(normalizedPath, content, rootDir, noSymlinks);
+    result.skipped.outsideRoot.push(...linkResult.outsideRoot);
+    result.skipped.symlinks.push(...linkResult.symlinks);
+
+    for (const linkedPath of linkResult.valid) {
+      if (!visited.has(path.resolve(linkedPath))) {
+        result.skipped.maxDepth.push(linkedPath);
+      }
+    }
   }
 
   // Calculate average score
   if (result.analyzed.length > 0) {
     const totalScore = result.analyzed.reduce((sum, item) => sum + item.evaluation.scores.overall, 0);
     result.summary.averageScore = Math.round(totalScore / result.analyzed.length * 10) / 10;
+  }
+
+  // Deduplicate: Remove files from skipped arrays if they were successfully analyzed
+  // Only do this at root level to avoid redundant filtering
+  if (currentDepth === 0) {
+    const analyzedPaths = new Set(result.analyzed.map(a => a.fullPath));
+
+    result.skipped.maxDepth = result.skipped.maxDepth
+      .filter(p => !analyzedPaths.has(path.resolve(p)));
+
+    result.skipped.maxCount = result.skipped.maxCount
+      .filter(p => !analyzedPaths.has(path.resolve(p)));
   }
 
   return result;
@@ -329,12 +353,9 @@ function analyzeDocument(filePath) {
     for (const match of linkMatches) {
       metrics.totalLinks++;
       const url = match[2];
-
-      if (url.startsWith('http://') || url.startsWith('https://')) {
-        metrics.externalLinks++;
-      } else {
-        metrics.internalLinks++;
-      }
+      const normalizedTarget = normalizeMarkdownLinkTarget(url);
+      if (normalizedTarget) metrics.internalLinks++;
+      else metrics.externalLinks++;
     }
   });
 
@@ -439,11 +460,11 @@ function evaluateMetrics(metrics) {
     } else if (metrics.internalLinks > 0) {
       scores.progressiveDisclosure = 7;
       feedback.push('⚠️  Some internal links present, but could be improved');
-	    } else {
-	      scores.progressiveDisclosure = 6;
-	      feedback.push('⚠️  No internal links detected - acceptable for small scope, otherwise consider links or tool-supported scoping (e.g., nested AGENTS.md)');
-	    }
-	  } else {
+    } else {
+      scores.progressiveDisclosure = 6;
+      feedback.push('⚠️  No internal links detected - acceptable for small scope, otherwise consider links or tool-supported scoping (e.g., nested AGENTS.md)');
+    }
+  } else {
     // Large documents should use links/hierarchy to avoid token bloat.
     if (metrics.internalLinks >= 3 && linkRatio >= 0.5) {
       scores.progressiveDisclosure = 10;
@@ -451,11 +472,11 @@ function evaluateMetrics(metrics) {
     } else if (metrics.internalLinks > 0) {
       scores.progressiveDisclosure = 6;
       feedback.push('⚠️  Some internal links present, but could be improved');
-	    } else {
-	      scores.progressiveDisclosure = 3;
-	      feedback.push('❌ No internal links detected - consider splitting content via links or tool-supported scoping (e.g., nested AGENTS.md)');
-	    }
-	  }
+    } else {
+      scores.progressiveDisclosure = 3;
+      feedback.push('❌ No internal links detected - consider splitting content via links or tool-supported scoping (e.g., nested AGENTS.md)');
+    }
+  }
 
   // Redundancy check
   if (metrics.redundancyIndicators.length > 0) {
@@ -477,40 +498,39 @@ function main() {
   const args = process.argv.slice(2);
 
   if (args.includes('--help') || args.includes('-h')) {
-    console.error('Usage: node analyze_document.js [options] <file-path>');
+    console.error('Usage: node analyze_document.js [options] <file-path> [<file-path2> ...]');
     console.error('Options:');
-    console.error('  --format summary     Output concise summary (recommended for LLM contexts)');
-    console.error('  --scope tree         Analyze nested matching files under a directory');
-    console.error('  --match <filename>   Filename to discover in --scope tree (default: AGENTS.md)');
-    console.error('  --max-agents <n>     Max matching files to analyze in --scope tree (default: 200)');
-    console.error('  --include-links      Follow internal links and analyze referenced files');
-    console.error('  --max-depth <n>      Max depth when following links (default: 1, requires --include-links)');
-    console.error('  --max-count <n>      Max files to analyze when following links (default: 10, requires --include-links)');
+    console.error('  --format full        Output full analysis (default: summary)');
+    console.error('  --no-include-links   Skip link analysis (default: enabled with --root-dir)');
+    console.error('  --root-dir <path>    Root directory for security sandboxing (REQUIRED for link analysis)');
+    console.error('  --max-depth <n>      Max depth when following links (default: 3)');
+    console.error('  --max-count <n>      Max files to analyze when following links (default: 30)');
+    console.error('  --no-symlinks        Skip symlink targets during link analysis (best-effort)');
+    console.error('');
+    console.error('Multiple file paths can be specified to analyze them together (with shared deduplication).');
     process.exit(0);
   }
 
   if (args.length === 0) {
-    console.error('Usage: node analyze_document.js [options] <file-path>');
+    console.error('Usage: node analyze_document.js [options] <file-path> [<file-path2> ...]');
     console.error('Options:');
-    console.error('  --format summary     Output concise summary (recommended for LLM contexts)');
-    console.error('  --scope tree         Analyze nested matching files under a directory');
-    console.error('  --match <filename>   Filename to discover in --scope tree (default: AGENTS.md)');
-    console.error('  --max-agents <n>     Max matching files to analyze in --scope tree (default: 200)');
-    console.error('  --include-links      Follow internal links and analyze referenced files');
-    console.error('  --max-depth <n>      Max depth when following links (default: 1, requires --include-links)');
-    console.error('  --max-count <n>      Max files to analyze when following links (default: 10, requires --include-links)');
+    console.error('  --format full        Output full analysis (default: summary)');
+    console.error('  --no-include-links   Skip link analysis (default: enabled with --root-dir)');
+    console.error('  --root-dir <path>    Root directory for security sandboxing (REQUIRED for link analysis)');
+    console.error('  --max-depth <n>      Max depth when following links (default: 3)');
+    console.error('  --max-count <n>      Max files to analyze when following links (default: 30)');
+    console.error('  --no-symlinks        Skip symlink targets during link analysis (best-effort)');
     process.exit(1);
   }
 
   // Parse options
-  let format = 'full';
-  let scope = 'file';
-  let matchFileName = 'AGENTS.md';
-  let maxAgents = 200;
-  let includeLinks = false;
-  let linkMaxDepth = 1;
-  let linkMaxCount = 10;
-  let filePath = null;
+  let format = 'summary';
+  let noIncludeLinks = false;
+  let noSymlinks = false;
+  let linkMaxDepth = 3;
+  let linkMaxCount = 30;
+  let rootDir = null;
+  const filePaths = [];
   const skipIndices = new Set();
 
   for (let i = 0; i < args.length; i++) {
@@ -518,21 +538,14 @@ function main() {
 
     if (args[i] === '--format' && i + 1 < args.length) {
       format = args[i + 1];
-      skipIndices.add(i + 1); // Mark next arg to skip
-    } else if (args[i] === '--scope' && i + 1 < args.length) {
-      scope = args[i + 1];
       skipIndices.add(i + 1);
-    } else if (args[i] === '--match' && i + 1 < args.length) {
-      matchFileName = args[i + 1];
+    } else if (args[i] === '--no-include-links') {
+      noIncludeLinks = true;
+    } else if (args[i] === '--no-symlinks' || args[i] === '--no-simlinks') {
+      noSymlinks = true;
+    } else if (args[i] === '--root-dir' && i + 1 < args.length) {
+      rootDir = path.resolve(args[i + 1]);
       skipIndices.add(i + 1);
-    } else if (args[i] === '--max-agents' && i + 1 < args.length) {
-      const parsed = Number.parseInt(args[i + 1], 10);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        maxAgents = parsed;
-      }
-      skipIndices.add(i + 1);
-    } else if (args[i] === '--include-links') {
-      includeLinks = true;
     } else if (args[i] === '--max-depth' && i + 1 < args.length) {
       const parsed = Number.parseInt(args[i + 1], 10);
       if (Number.isFinite(parsed) && parsed > 0) {
@@ -545,47 +558,197 @@ function main() {
         linkMaxCount = parsed;
       }
       skipIndices.add(i + 1);
-    } else if (!filePath) {
-      filePath = args[i];
+    } else {
+      // Collect all non-option arguments as file paths
+      filePaths.push(args[i]);
     }
   }
 
-  if (!filePath) {
-    console.error('Error: File path is required');
-    console.error('Usage: node analyze_document.js [options] <file-path>');
+  if (filePaths.length === 0) {
+    console.error('Error: At least one file path is required');
+    console.error('Usage: node analyze_document.js [options] <file-path> [<file-path2> ...]');
     process.exit(1);
   }
 
-  if (!fs.existsSync(filePath)) {
-    console.error(`Error: File not found: ${filePath}`);
+  // Validate all file paths exist
+  for (const filePath of filePaths) {
+    if (!fs.existsSync(filePath)) {
+      console.error(`Error: File not found: ${filePath}`);
+      process.exit(1);
+    }
+  }
+
+  if (format !== 'summary' && format !== 'full') {
+    console.error(`Error: Invalid --format value: ${format} (use "summary" or "full")`);
     process.exit(1);
+  }
+
+  // Validation: rootDir must exist if specified
+  if (rootDir && !fs.existsSync(rootDir)) {
+    console.error(`Error: Root directory not found: ${rootDir}`);
+    process.exit(1);
+  }
+
+  const includeLinks = noIncludeLinks ? false : !!rootDir;
+
+  const rootRealPath = rootDir ? resolveRootRealPath(rootDir) : null;
+
+  if (includeLinks) {
+    // Enforce sandbox for entry points as well
+    for (const filePath of filePaths) {
+      const normalizedPath = path.resolve(filePath);
+      const realPath = fs.realpathSync(normalizedPath);
+
+      if (!isRealPathWithinRoot(realPath, rootRealPath)) {
+        console.error(`Error: Entry point is outside --root-dir sandbox: ${normalizedPath}`);
+        process.exit(1);
+      }
+
+      if (noSymlinks && path.resolve(realPath) !== normalizedPath) {
+        console.error(`Error: Symlink entrypoints are not allowed with --no-symlinks: ${filePath}`);
+        process.exit(1);
+      }
+    }
   }
 
   try {
-    const isDir = isDirectoryPath(filePath);
-    const isTreeScope = scope === 'tree';
-
     let result;
 
-    if (isTreeScope) {
-      const rootDir = isDir ? filePath : path.dirname(filePath);
-      const { files: conventionFiles, truncated } = discoverConventionFiles(rootDir, matchFileName, maxAgents);
-      const conventionFileSet = new Set(conventionFiles.map(f => normalizeAbsolutePath(f)));
+    if (includeLinks) {
+      // Analyze with linked files (shared visited set for deduplication across all entry points)
+      const sharedVisited = new Set();
 
-      const analyses = conventionFiles.map(conventionFile => {
-        const metrics = analyzeDocument(conventionFile);
+      const allResults = {
+        analyzed: [],
+        notFound: [],
+        skipped: {
+          maxDepth: [],
+          maxCount: [],
+          outsideRoot: [],
+          symlinks: []
+        },
+        summary: {
+          totalAnalyzed: 0,
+          averageScore: 0,
+          worstScore: 10,
+          worstFile: null
+        }
+      };
+
+      for (const filePath of filePaths) {
+        const linkedAnalysis = analyzeWithLinks(filePath, {
+          maxDepth: linkMaxDepth,
+          maxCount: linkMaxCount,
+          format,
+          rootDir,
+          rootRealPath,
+          noSymlinks,
+          visited: sharedVisited,
+          currentDepth: 0
+        });
+
+        // Merge results
+        allResults.analyzed.push(...linkedAnalysis.analyzed);
+        allResults.notFound.push(...linkedAnalysis.notFound);
+        allResults.skipped.maxDepth.push(...linkedAnalysis.skipped.maxDepth);
+        allResults.skipped.maxCount.push(...linkedAnalysis.skipped.maxCount);
+        allResults.skipped.outsideRoot.push(...linkedAnalysis.skipped.outsideRoot);
+        allResults.skipped.symlinks.push(...linkedAnalysis.skipped.symlinks);
+
+        // Update worst score
+        if (linkedAnalysis.summary.worstScore < allResults.summary.worstScore) {
+          allResults.summary.worstScore = linkedAnalysis.summary.worstScore;
+          allResults.summary.worstFile = linkedAnalysis.summary.worstFile;
+        }
+      }
+
+      // Calculate aggregate summary
+      allResults.summary.totalAnalyzed = allResults.analyzed.length;
+      if (allResults.analyzed.length > 0) {
+        const totalScore = allResults.analyzed.reduce((sum, item) => sum + item.evaluation.scores.overall, 0);
+        allResults.summary.averageScore = Math.round(totalScore / allResults.analyzed.length * 10) / 10;
+      }
+
+      // Cross-entrypoint deduplication of skipped/notFound based on actually analyzed files
+      const analyzedPaths = new Set(allResults.analyzed.map(a => a.fullPath));
+      allResults.notFound = uniqStrings(allResults.notFound);
+      allResults.skipped.maxDepth = uniqStrings(allResults.skipped.maxDepth)
+        .filter(p => !analyzedPaths.has(path.resolve(p)));
+      allResults.skipped.maxCount = uniqStrings(allResults.skipped.maxCount)
+        .filter(p => !analyzedPaths.has(path.resolve(p)));
+
+      // Format output based on number of entry points
+      if (filePaths.length === 1) {
+        // Single file: backward compatible format
+        result = {
+          file: path.basename(filePaths[0]),
+          linkedAnalysis: allResults
+        };
+      } else {
+        // Multiple files: unified format with entry points
+        result = {
+          entryPoints: filePaths.map(fp => path.basename(fp)),
+          linkedAnalysis: allResults
+        };
+      }
+
+      // Warn if analysis was incomplete due to limits
+      if (allResults.skipped.maxCount.length > 0) {
+        console.warn(`⚠️  [WARNING] Reached max file count limit (--max-count=${linkMaxCount})`);
+        console.warn(`   ${allResults.skipped.maxCount.length} files were skipped during analysis.`);
+        console.warn(`   Consider increasing --max-count to analyze more linked documents.`);
+        console.warn('');
+      }
+
+      if (allResults.skipped.maxDepth.length > 0) {
+        console.warn(`⚠️  [WARNING] Reached max depth limit (--max-depth=${linkMaxDepth})`);
+        console.warn(`   ${allResults.skipped.maxDepth.length} links were not followed.`);
+        console.warn(`   Consider increasing --max-depth to analyze deeper link chains.`);
+        console.warn('');
+      }
+    } else {
+      // No link analysis: process each file independently
+      if (filePaths.length === 1) {
+        // Single file: backward compatible format
+        const filePath = filePaths[0];
+        const metrics = analyzeDocument(filePath);
         const evaluation = evaluateMetrics(metrics);
 
-        const parentConventionFile = findNearestParentConventionFile(conventionFile, conventionFileSet, rootDir, matchFileName);
+        if (format === 'summary') {
+          result = {
+            file: path.basename(filePath),
+            metrics: {
+              totalLines: metrics.totalLines,
+              nonEmptyLines: metrics.nonEmptyLines,
+              wordCount: metrics.wordCount,
+              sectionCount: metrics.sectionCount,
+              maxDepth: metrics.maxDepth,
+              internalLinks: metrics.internalLinks,
+              externalLinks: metrics.externalLinks,
+              totalLinks: metrics.totalLinks,
+              frontLoadedContent: metrics.frontLoadedContent,
+              avgSectionLength: metrics.avgSectionLength,
+              redundancyCount: metrics.redundancyIndicators.length
+            },
+            evaluation
+          };
+        } else {
+          result = {
+            file: path.basename(filePath),
+            metrics,
+            evaluation
+          };
+        }
+      } else {
+        // Multiple files: return array of results
+        const results = [];
+        for (const filePath of filePaths) {
+          const metrics = analyzeDocument(filePath);
+          const evaluation = evaluateMetrics(metrics);
 
-        const relativePath = path.relative(rootDir, conventionFile);
-        const parentRelativePath = parentConventionFile ? path.relative(rootDir, parentConventionFile) : null;
-
-        const payload = format === 'summary'
-          ? {
-              file: path.basename(conventionFile),
-              relativePath,
-              parentRelativePath,
+          if (format === 'summary') {
+            results.push({
+              file: path.basename(filePath),
               metrics: {
                 totalLines: metrics.totalLines,
                 nonEmptyLines: metrics.nonEmptyLines,
@@ -600,75 +763,16 @@ function main() {
                 redundancyCount: metrics.redundancyIndicators.length
               },
               evaluation
-            }
-          : {
-              file: path.basename(conventionFile),
-              relativePath,
-              parentRelativePath,
+            });
+          } else {
+            results.push({
+              file: path.basename(filePath),
               metrics,
               evaluation
-            };
-
-        return payload;
-      });
-
-      result = {
-        target: filePath,
-        scope: {
-          mode: 'tree',
-          rootDir,
-          matchFileName,
-          maxAgents,
-          truncated
-        },
-        documents: analyses,
-        // Backward compatible alias (kept for older prompts/docs)
-        agents: analyses
-      };
-    } else if (includeLinks) {
-      // Analyze with linked files
-      const linkedAnalysis = analyzeWithLinks(filePath, {
-        maxDepth: linkMaxDepth,
-        maxCount: linkMaxCount,
-        format
-      });
-
-      result = {
-        file: path.basename(filePath),
-        linkedAnalysis
-      };
-    } else {
-      // Single file analysis
-      const metrics = analyzeDocument(filePath);
-      const evaluation = evaluateMetrics(metrics);
-
-      // Output results based on format
-      if (format === 'summary') {
-        // Concise output without detailed sections array
-        result = {
-          file: path.basename(filePath),
-          metrics: {
-            totalLines: metrics.totalLines,
-            nonEmptyLines: metrics.nonEmptyLines,
-            wordCount: metrics.wordCount,
-            sectionCount: metrics.sectionCount,
-            maxDepth: metrics.maxDepth,
-            internalLinks: metrics.internalLinks,
-            externalLinks: metrics.externalLinks,
-            totalLinks: metrics.totalLinks,
-            frontLoadedContent: metrics.frontLoadedContent,
-            avgSectionLength: metrics.avgSectionLength,
-            redundancyCount: metrics.redundancyIndicators.length
-          },
-          evaluation
-        };
-      } else {
-        // Full output with all details
-        result = {
-          file: path.basename(filePath),
-          metrics,
-          evaluation
-        };
+            });
+          }
+        }
+        result = { results };
       }
     }
 

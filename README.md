@@ -20,7 +20,7 @@ This skill helps identify these issues and provides concrete improvements backed
 - Automated document metrics (line count, structure, links)
 - Objective quality scoring (0-10 scale)
 - Redundancy detection
-- Optional tree-scope discovery for nested `AGENTS.md` files (override-aware)
+- Multi-entry analysis with shared deduplication (common references analyzed once)
 - Pure Node.js implementation (no external dependencies)
 
 ### 📋 Comprehensive Review Criteria
@@ -179,28 +179,29 @@ agent-document-reviewer/
 
 ### Testing the Analysis Script
 
-Test with this project's own README:
+Recommended: analyze a file plus its linked documents (requires `--root-dir`):
 
 ```bash
-node agent-document-reviewer/scripts/analyze_document.js README.md
+node agent-document-reviewer/scripts/analyze_document.js --root-dir . README.md
 ```
 
-Test with a sample document:
+Single-file only (skip link analysis):
 
 ```bash
-node agent-document-reviewer/scripts/analyze_document.js tests/sample-agents.md
+node agent-document-reviewer/scripts/analyze_document.js --no-include-links README.md
 ```
 
-Discover nested `AGENTS.md` files under a directory (useful for monorepos with hierarchical overrides):
+Analyze all `AGENTS.md` files under a directory (shared deduplication across entry points):
 
 ```bash
-node agent-document-reviewer/scripts/analyze_document.js --scope tree --format summary path/to/
+find path/to/project -name "AGENTS.md" -exec \
+  node agent-document-reviewer/scripts/analyze_document.js --root-dir path/to/project {} +
 ```
 
-You can also change the filename the tree scan looks for (use only if your agent/tool supports hierarchy for that filename):
+Optional hardening (skip symlink targets when following links):
 
 ```bash
-node agent-document-reviewer/scripts/analyze_document.js --scope tree --match AGENTS.md --format summary path/to/
+node agent-document-reviewer/scripts/analyze_document.js --root-dir . --no-symlinks README.md
 ```
 
 ### Rebuilding the Skill

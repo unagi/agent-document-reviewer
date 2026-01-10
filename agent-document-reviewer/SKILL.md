@@ -23,19 +23,21 @@ Follow this sequence when reviewing a document:
 Run the quantitative analysis script to get objective metrics:
 
 ```bash
-# Analyze single file
-node scripts/analyze_document.js --format summary <file-path>
+# Default: Analyze file + all linked files (recommended)
+node scripts/analyze_document.js --root-dir <root-directory> <file-path>
 
-# Analyze file + all linked files (recommended for documents with progressive disclosure)
-node scripts/analyze_document.js --format summary --include-links <file-path>
+# Analyze single file only (skip link analysis)
+node scripts/analyze_document.js --no-include-links <file-path>
 ```
 
-**Why `--include-links` is important**: Progressive disclosure isn't just about having links—it's about the quality of the entire system (main doc + linked docs). Without analyzing referenced files, you can miss critical issues like over-fragmentation in reference documents.
+**⚠️ SECURITY**: The `--root-dir` parameter is **REQUIRED** for link analysis. It enforces a security sandbox, preventing malicious documents from accessing sensitive files (like `~/.ssh/id_rsa` or `~/.aws/credentials`) through directory traversal attacks (`../../../etc/passwd`).
 
-The `--include-links` option:
+**Default behavior**: Link analysis is enabled by default when `--root-dir` is specified. This ensures progressive disclosure evaluation includes the entire documentation system (main doc + linked docs).
+
+Link analysis:
 - Follows internal markdown links automatically
-- Detects circular references
 - Reports missing files (broken links)
+- Blocks links outside root directory (security sandbox)
 - Provides aggregate quality metrics across all documents
 
 For detailed usage including path options and output format, see [Using the Analysis Script](#using-the-analysis-script) below.
@@ -48,26 +50,31 @@ This skill is not AGENTS.md-only. **Instruction discovery, scope, and overrides 
 
 When reviewing `path/to/AGENTS.md`, treat it as instructions for the directory subtree `path/to/**` — but note that **nested `AGENTS.md` files override parent instructions for their own subtrees**.
 
-- **Scope rule (default)**: Only analyze the target subtree and documents reachable via links from in-scope `AGENTS.md` files. Do **not** crawl the entire repository by default.
-- **Override model**: The closest `AGENTS.md` to the edited file wins; explicit user chat prompts override everything.
-- **What to review**: the requested `AGENTS.md`, any nested `AGENTS.md` under that directory (they change effective rules for parts of the subtree), and any linked documents from those in-scope `AGENTS.md` files.
+- **Scope rule**: Analyze the requested `AGENTS.md` and documents reachable via its internal links
+- **Override model**: The closest `AGENTS.md` to the edited file wins; explicit user chat prompts override everything
+- **Multiple AGENTS.md**: To analyze all AGENTS.md files in a directory tree:
+  ```bash
+  # Option 1: Unified analysis (with shared deduplication, recommended)
+  # Analyze all together - common references (TESTING.md etc.) are analyzed once
+  find /path/to/project -name "AGENTS.md" -exec \
+    node scripts/analyze_document.js --root-dir /path/to/project {} +
 
-To discover nested overrides:
-```bash
-# Analyze all AGENTS.md files under a directory
-node scripts/analyze_document.js --scope tree --format summary path/to/
+  # Or use shell glob expansion
+  node scripts/analyze_document.js --root-dir /project /project/**/AGENTS.md
 
-# Analyze AGENTS.md + nested AGENTS.md under its directory
-node scripts/analyze_document.js --scope tree --format summary path/to/AGENTS.md
-```
+  # Option 2: Individual analysis (separate reports)
+  # Analyze each one independently
+  find /path/to/project -name "AGENTS.md" -print0 | \
+    xargs -0 -I {} node scripts/analyze_document.js --no-include-links {}
+  ```
 
 **For other instruction files (CLAUDE.md, GitHub Copilot, Aider, etc.):**
 
 Do **not** assume "nearest file wins" or parent-directory discovery unless the tool's documentation says so. See [conventions.md](references/conventions.md) for a quick reference.
 
-If the tool is unknown, keep scope to:
-- the requested file
-- documents explicitly linked from it
+Default scope:
+- The requested file
+- Documents explicitly linked from it
 
 ### 2. Qualitative Review
 
@@ -87,7 +94,7 @@ Read the document with these questions in mind:
 - Is detailed content split into separate files?
 - Are internal links clear about when to read them?
 - Is the main document lean enough to be fully loaded?
-- **⚠️ CRITICAL**: Review linked files too! Use `--include-links` in Step 1. High internal link count means nothing if referenced files have poor quality (e.g., 71 sections, over-fragmentation).
+- **⚠️ CRITICAL**: Review linked files too! Step 1 の `--root-dir` 付き実行（デフォルトでリンク解析有効）で、リンク先ドキュメントも含めて評価してください。内部リンクが多くても、参照先が低品質（例: セクション過多・過分割）だと逆効果になり得ます。
 
 For detailed criteria, see [review-criteria.md](references/review-criteria.md).
 
@@ -150,37 +157,60 @@ The `scripts/analyze_document.js` script provides deterministic metrics to suppo
 
 **Basic usage**:
 ```bash
-# Single file
-node scripts/analyze_document.js --format summary <file-path>
+# Default: Analyze file + linked files (recommended)
+node scripts/analyze_document.js --root-dir <root-directory> <file-path>
 
-# File + linked files (recommended)
-node scripts/analyze_document.js --format summary --include-links <file-path>
+# Single file only (skip link analysis)
+node scripts/analyze_document.js --no-include-links <file-path>
+
+# Full output format (instead of summary)
+node scripts/analyze_document.js --root-dir <root-directory> --format full <file-path>
 ```
 
-**Options for `--include-links`**:
+**Advanced options**:
 ```bash
-# Default: depth=1, count=10
-node scripts/analyze_document.js --format summary --include-links <file-path>
+# Custom limits (for very large documentation systems)
+node scripts/analyze_document.js --root-dir <root-directory> --max-depth 5 --max-count 50 <file-path>
 
-# Custom limits (for large documentation systems)
-node scripts/analyze_document.js --format summary --include-links --max-depth 2 --max-count 20 <file-path>
+# Optional hardening (skip symlink targets when following links)
+node scripts/analyze_document.js --root-dir <root-directory> --no-symlinks <file-path>
+```
+
+**Multiple files** (unified analysis with shared deduplication):
+```bash
+# Analyze multiple files together (common references analyzed once)
+node scripts/analyze_document.js --root-dir /project \
+  /project/AGENTS.md /project/subdir/AGENTS.md
+
+# Use shell glob expansion
+node scripts/analyze_document.js --root-dir /project /project/**/AGENTS.md
+
+# With find command
+find /project -name "AGENTS.md" -exec \
+  node scripts/analyze_document.js --root-dir /project {} +
 ```
 
 **Path options** (depending on your working directory):
 ```bash
 # Codex standard installation path
-node ~/.codex/skills/agent-document-reviewer/scripts/analyze_document.js --format summary --include-links <file-path>
+node ~/.codex/skills/agent-document-reviewer/scripts/analyze_document.js --root-dir <root-directory> <file-path>
 
 # Claude Code standard installation path
-node ~/.claude/skills/agent-document-reviewer/scripts/analyze_document.js --format summary --include-links <file-path>
+node ~/.claude/skills/agent-document-reviewer/scripts/analyze_document.js --root-dir <root-directory> <file-path>
 
-# Relative path from working directory
-node scripts/analyze_document.js --format summary --include-links <file-path>
+# Relative path from working directory (from project root)
+node scripts/analyze_document.js --root-dir . <file-path>
 ```
 
-**Important**: Use `--format summary` to produce concise output suitable for LLM contexts. This omits detailed section arrays and provides only key metrics and evaluation scores.
+**Important notes**:
+- Default output format is `summary` (concise, suitable for LLM contexts)
+- Default behavior includes link analysis when `--root-dir` is specified
+- `--root-dir` is REQUIRED for link analysis (security sandbox)
+- Use `--no-include-links` to skip link analysis (single file only)
+- Use `--no-symlinks` to avoid reading through symlink targets during link analysis (best-effort)
+- Use `--format full` for detailed output with section arrays
 
-**Output** (single file):
+**Output** (single file with `--no-include-links`):
 ```json
 {
   "file": "AGENTS.md",
@@ -198,7 +228,7 @@ node scripts/analyze_document.js --format summary --include-links <file-path>
 }
 ```
 
-**Output** (with `--include-links`):
+**Output** (default with `--root-dir`, includes link analysis):
 ```json
 {
   "file": "AGENTS.md",
@@ -209,9 +239,11 @@ node scripts/analyze_document.js --format summary --include-links <file-path>
     ],
     "notFound": ["references/missing-file.md"],
     "skipped": {
-      "circular": [],
       "maxDepth": ["deeper-file.md"],
-      "maxCount": []
+      "maxCount": [],
+      "outsideRoot": [
+        { "url": "../../../etc/passwd", "resolvedPath": "/etc/passwd" }
+      ]
     },
     "summary": {
       "totalAnalyzed": 2,
@@ -222,6 +254,28 @@ node scripts/analyze_document.js --format summary --include-links <file-path>
   }
 }
 ```
+
+**Output** (multiple files with `--root-dir`, unified analysis):
+```json
+{
+  "entryPoints": ["AGENTS.md", "subdir/AGENTS.md"],
+  "linkedAnalysis": {
+    "analyzed": [
+      { "file": "AGENTS.md", "depth": 0, "metrics": {...}, "evaluation": {...} },
+      { "file": "COMMON.md", "depth": 1, "metrics": {...}, "evaluation": {...} },
+      { "file": "subdir/AGENTS.md", "depth": 0, "metrics": {...}, "evaluation": {...} }
+    ],
+    "summary": {
+      "totalAnalyzed": 3,
+      "averageScore": 8.0,
+      "worstScore": 7,
+      "worstFile": "/path/to/AGENTS.md"
+    }
+  }
+}
+```
+
+Note: When analyzing multiple entry points, common references (like COMMON.md) are analyzed only once due to shared deduplication.
 
 **Interpreting scores** (0-10 scale):
 - **8-10**: Excellent
